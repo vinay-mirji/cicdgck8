@@ -1,0 +1,61 @@
+# [START cloudbuild-CI]
+steps:
+    # This step builds the container image.
+    - name: 'gcr.io/cloud-builders/docker'
+      id: Build
+      args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/cicdgck8-build:$SHORT_SHA'
+      - '.'
+      - '--build-arg'
+      - 'COMMIT_SHA=$SHORT_SHA'
+      - '--build-arg'
+      - 'PORT_ARG=8080'
+    
+    # This step pushes the image to Container Registry
+    # The PROJECT_ID and SHORT_SHA variables are automatically
+    # replaced by Cloud Build.
+    - name: 'gcr.io/cloud-builders/docker'
+      id: Push
+      args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/cicdgck8-build:$SHORT_SHA'
+# [END cloudbuild-CI]
+
+# [START cloudbuild-cd]
+# This step clones the cicdgck8-env repository
+    - name: 'gcr.io/cloud-builders/gcloud'
+      id: Clone env repository
+      entrypoint: /bin/sh
+      args:
+      - '-c'
+      - |
+        gcloud source repos clone cicdgck8-env && \
+        cd cicdgck8-env && \
+        git checkout candidate && \
+        git config user.email $(gcloud auth list --filter=status:ACTIVE --format='value(account)')
+    # This step generates the new manifest
+    - name: 'gcr.io/cloud-builders/gcloud'
+      id: Generate manifest
+      entrypoint: /bin/sh
+      args:
+      - '-c'
+      - |
+        sed "s/GOOGLE_CLOUD_PROJECT/${PROJECT_ID}/g" kubernetes.yaml.tpl | \
+        sed "s/COMMIT_SHA/${SHORT_SHA}/g" > cicdgck8-env/kubernetes.yaml
+    # This step pushes the manifest back to cicdgck8-env
+    - name: 'gcr.io/cloud-builders/gcloud'
+      id: Push manifest
+      entrypoint: /bin/sh
+      args:
+      - '-c'
+      - |
+        set -x && \
+        cd cicdgck8-env && \
+        git add kubernetes.yaml && \
+        git commit -m "Deploying image gcr.io/${PROJECT_ID}/cicdgck8-build:${SHORT_SHA}
+        Built from commit ${COMMIT_SHA} of repository cicdgck8-repo
+        Author: $(git log --format='%an <%ae>' -n 1 HEAD)" && \
+        git push origin candidate
+# [END cloudbuild-cd]
